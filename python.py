@@ -30,7 +30,6 @@ if "client" not in st.session_state:
             st.error(f"Lỗi khởi tạo Gemini Client: {e}")
             st.session_state.client = None
     else:
-        st.error("Lỗi: Không tìm thấy Khóa API. Vui lòng cấu hình Khóa 'GEMINI_API_KEY' trong Streamlit Secrets.")
         st.session_state.client = None
 
 # --- Hàm tính toán chính (Sử dụng Caching để Tối ưu hiệu suất) ---
@@ -73,8 +72,7 @@ def process_financial_data(df):
     
     return df
 
-# --- Hàm gọi API Gemini (Dùng cho Phân tích tự động) ---
-# Hàm này được giữ nguyên và tinh chỉnh để sử dụng client từ session state
+# --- Hàm gọi API Gemini (Hàm cũ) ---
 def get_ai_analysis(data_for_ai, client):
     """Gửi dữ liệu phân tích đến Gemini API và nhận nhận xét."""
     if not client:
@@ -100,38 +98,38 @@ def get_ai_analysis(data_for_ai, client):
         return f"Lỗi gọi Gemini API: Vui lòng kiểm tra Khóa API hoặc giới hạn sử dụng. Chi tiết lỗi: {e}"
     except Exception as e:
         return f"Đã xảy ra lỗi không xác định: {e}"
-
-# --- Hàm xử lý Chatbot ---
-def handle_chatbot_input(user_prompt, df_processed_markdown):
-    """Xử lý đầu vào từ người dùng và gửi đến chat session của Gemini."""
-    
+        
+# --- Hàm khởi tạo Chat Session ---
+def initialize_chat_session(df_processed_markdown):
+    """Khởi tạo Chat Session với System Instruction."""
     client = st.session_state.get("client")
     if not client:
-        st.error("Không thể kết nối Chatbot. Vui lòng kiểm tra Khóa API.", icon="🚨")
-        return
+        return False
+    
+    # System instruction để Gemini hiểu ngữ cảnh
+    system_instruction = f"""
+    Bạn là một Trợ lý phân tích tài chính chuyên nghiệp và thân thiện, có khả năng trả lời các câu hỏi dựa trên dữ liệu Báo cáo Tài chính được cung cấp.
+    
+    Dữ liệu phân tích tài chính hiện tại của công ty:
+    {df_processed_markdown}
+    
+    Hãy sử dụng dữ liệu này để trả lời các câu hỏi của người dùng. Nếu thông tin không có trong bảng, hãy trả lời theo kiến thức tài chính chung. Luôn trả lời bằng Tiếng Việt.
+    """
+    
+    st.session_state.chat_session = client.chats.create(
+        model="gemini-2.5-flash",
+        system_instruction=system_instruction
+    )
+    st.session_state.chat_history.append({"role": "model", "content": "Chào bạn! Tôi là Trợ lý AI. Hãy hỏi tôi về dữ liệu tài chính bạn vừa tải lên nhé."})
+    return True
 
-    # Khởi tạo chat session nếu chưa có
+# --- Hàm xử lý Chatbot cho Pop-up ---
+def handle_chatbot_input_popup(user_prompt, chat_container):
+    """Xử lý đầu vào từ người dùng và gửi đến chat session của Gemini."""
+    
     if st.session_state.chat_session is None:
-        # System instruction để Gemini hiểu ngữ cảnh
-        system_instruction = f"""
-        Bạn là một Trợ lý phân tích tài chính chuyên nghiệp và thân thiện, có khả năng trả lời các câu hỏi dựa trên dữ liệu Báo cáo Tài chính được cung cấp.
-        
-        Dữ liệu phân tích tài chính hiện tại của công ty:
-        {df_processed_markdown}
-        
-        Hãy sử dụng dữ liệu này để trả lời các câu hỏi của người dùng. Nếu thông tin không có trong bảng, hãy trả lời theo kiến thức tài chính chung. Luôn trả lời bằng Tiếng Việt.
-        """
-        
-        st.session_state.chat_session = client.chats.create(
-            model="gemini-2.5-flash",
-            system_instruction=system_instruction
-        )
-        # Thêm tin nhắn chào mừng (chỉ khi khởi tạo session mới)
-        st.session_state.chat_history.append({"role": "model", "content": "Chào bạn! Tôi là Trợ lý AI Phân tích Tài chính. Bạn có câu hỏi nào về các chỉ số trên không?"})
-        # Dùng return để ngắt và rerender lại giao diện chat (nếu là lần đầu)
-        if user_prompt == "": 
-            st.rerun() 
-            return
+        chat_container.error("Chatbot chưa sẵn sàng. Vui lòng nhấn nút **Bật/Reset Chat**.", icon="🚨")
+        return
 
     # Thêm câu hỏi người dùng vào lịch sử
     st.session_state.chat_history.append({"role": "user", "content": user_prompt})
@@ -139,13 +137,12 @@ def handle_chatbot_input(user_prompt, df_processed_markdown):
     # Gửi tin nhắn đến Gemini và hiển thị kết quả
     try:
         # Hiển thị tin nhắn người dùng
-        with st.sidebar.chat_message("user"):
+        with chat_container.chat_message("user"):
             st.markdown(user_prompt)
 
         # Hiển thị phản hồi của model
-        with st.sidebar.chat_message("model"):
+        with chat_container.chat_message("model"):
             with st.spinner("Đang phân tích..."):
-                # Gửi prompt qua chat session
                 response = st.session_state.chat_session.send_message(user_prompt)
                 model_response = response.text
             
@@ -155,12 +152,12 @@ def handle_chatbot_input(user_prompt, df_processed_markdown):
         st.session_state.chat_history.append({"role": "model", "content": model_response})
         
     except APIError as e:
-        error_message = f"Lỗi gọi Gemini API trong Chatbot: {e}"
-        st.error(error_message, icon="🚨")
+        error_message = f"Lỗi gọi Gemini API: {e}"
+        chat_container.error(error_message, icon="🚨")
         st.session_state.chat_history.append({"role": "model", "content": "Lỗi: Không thể nhận phản hồi từ AI."})
     except Exception as e:
-        error_message = f"Đã xảy ra lỗi không xác định trong Chatbot: {e}"
-        st.error(error_message, icon="🚨")
+        error_message = f"Đã xảy ra lỗi không xác định: {e}"
+        chat_container.error(error_message, icon="🚨")
         st.session_state.chat_history.append({"role": "model", "content": "Lỗi: Đã xảy ra lỗi bất ngờ."})
 
 
@@ -247,7 +244,6 @@ if uploaded_file is not None:
             st.subheader("5. Nhận xét Tình hình Tài chính (AI)")
             
             # Chuẩn bị dữ liệu để gửi cho AI
-            # Đảm bảo lấy Tăng trưởng Tài sản ngắn hạn một cách an toàn
             tsnh_tg_row = df_processed[df_processed['Chỉ tiêu'].str.contains('TÀI SẢN NGẮN HẠN', case=False, na=False)]
             tsnh_tg = f"{tsnh_tg_row['Tốc độ tăng trưởng (%)'].iloc[0]:.2f}%" if not tsnh_tg_row.empty else "N/A"
             
@@ -285,41 +281,50 @@ if uploaded_file is not None:
 else:
     st.info("Vui lòng tải lên file Excel để bắt đầu phân tích.")
     
+
 # ******************************************************************************
-# --- PHẦN BỔ SUNG CHATBOT Ở SIDEBAR ---
+# --- PHẦN BỔ SUNG KHUNG CHAT RIÊNG BIỆT (Pop-up mô phỏng) ---
 # ******************************************************************************
-with st.sidebar:
-    st.header("Trợ lý Chatbot AI 🤖")
+st.markdown("---")
+st.subheader("6. Trợ lý Chatbot AI")
+st.markdown("*(Dùng để hỏi đáp chuyên sâu về dữ liệu tài chính bạn đã tải lên)*")
+
+# Nút Bật/Reset Chat
+if df_processed is not None:
+    if st.button("Bật/Reset Chat", key="reset_chat", type="primary"):
+        st.session_state.chat_session = None # Xóa session cũ
+        st.session_state.chat_history = [] # Xóa lịch sử
+        
+        # Khởi tạo session mới sau khi reset
+        if st.session_state.client and df_processed_markdown:
+            if initialize_chat_session(df_processed_markdown):
+                # Khởi tạo thành công, chỉ cần rerender
+                st.rerun() 
+            else:
+                st.error("Không thể khởi tạo chat session. Vui lòng kiểm tra Khóa API.")
+        else:
+            st.error("Lỗi: Không tìm thấy Khóa API hoặc Client chưa sẵn sàng.")
+else:
+    st.info("Tải file lên trước để kích hoạt chatbot.")
+
+
+# --- Khu vực Chat Interface ---
+if st.session_state.chat_session is not None:
     
-    if df_processed is None:
-        st.warning("Vui lòng tải file để kích hoạt Chatbot với dữ liệu tài chính.")
-    else:
-        # Nút để bắt đầu/reset chat session
-        if st.button("Bắt đầu/Reset Chat"):
-            st.session_state.chat_session = None # Xóa session cũ
-            st.session_state.chat_history = [] # Xóa lịch sử
-            
-            if API_KEY: # Chỉ thực hiện nếu có API Key
-                 # Gọi hàm để khởi tạo session và tin nhắn chào mừng
-                 handle_chatbot_input("", df_processed_markdown) 
-            
-        st.markdown("---")
-        
-        # Hiển thị lịch sử chat
-        chat_container = st.container(height=450, border=True)
+    # Container để chứa lịch sử chat
+    chat_history_container = st.container(height=400, border=True)
 
-        for message in st.session_state.chat_history:
-            with chat_container.chat_message(message["role"]):
-                st.markdown(message["content"])
+    # Hiển thị lịch sử chat
+    for message in st.session_state.chat_history:
+        with chat_history_container.chat_message(message["role"]):
+            st.markdown(message["content"])
 
-        # Input cho người dùng
-        user_prompt = st.chat_input("Hỏi AI về các chỉ số tài chính...", disabled=st.session_state.chat_session is None)
-        
-        # Nếu chưa có session, hiển thị thông báo
-        if st.session_state.chat_session is None:
-             st.info("Nhấn **'Bắt đầu/Reset Chat'** để kích hoạt trợ lý AI.")
-        
-        if user_prompt:
-            # Nếu người dùng nhập, gọi hàm xử lý chat
-            handle_chatbot_input(user_prompt, df_processed_markdown)
-            st.rerun() # Tải lại trang để hiển thị tin nhắn mới ngay lập tức
+    # Input cho người dùng
+    user_prompt = st.chat_input("Hỏi AI về các chỉ số tài chính...", key="chat_input_main")
+    
+    if user_prompt:
+        # Nếu người dùng nhập, gọi hàm xử lý chat
+        handle_chatbot_input_popup(user_prompt, chat_history_container)
+        st.rerun() # Tải lại trang để hiển thị tin nhắn mới ngay lập tức
+else:
+    st.info("Nhấn nút **'Bật/Reset Chat'** để khởi động phiên trò chuyện dựa trên dữ liệu tài chính của bạn.")
