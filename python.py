@@ -116,9 +116,12 @@ def initialize_chat_session(df_processed_markdown):
     Hãy sử dụng dữ liệu này để trả lời các câu hỏi của người dùng. Nếu thông tin không có trong bảng, hãy trả lời theo kiến thức tài chính chung. Luôn trả lời bằng Tiếng Việt.
     """
     
+    # SỬA LỖI: Cần truyền system_instruction thông qua config cho client.chats.create
     st.session_state.chat_session = client.chats.create(
         model="gemini-2.5-flash",
-        system_instruction=system_instruction
+        config=genai.types.GenerateContentConfig(
+            system_instruction=system_instruction
+        )
     )
     st.session_state.chat_history.append({"role": "model", "content": "Chào bạn! Tôi là Trợ lý AI. Hãy hỏi tôi về dữ liệu tài chính bạn vừa tải lên nhé."})
     return True
