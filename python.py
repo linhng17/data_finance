@@ -30,6 +30,7 @@ if "client" not in st.session_state:
             st.error(f"Lỗi khởi tạo Gemini Client: {e}")
             st.session_state.client = None
     else:
+        # Nếu API Key không tồn tại, client sẽ là None
         st.session_state.client = None
 
 # --- Hàm tính toán chính (Sử dụng Caching để Tối ưu hiệu suất) ---
@@ -58,17 +59,13 @@ def process_financial_data(df):
     tong_tai_san_N_1 = tong_tai_san_row['Năm trước'].iloc[0]
     tong_tai_san_N = tong_tai_san_row['Năm sau'].iloc[0]
 
-    # ******************************* PHẦN SỬA LỖI BẮT ĐẦU *******************************
-    # Lỗi xảy ra khi dùng .replace() trên giá trị đơn lẻ (numpy.int64).
-    # Sử dụng điều kiện ternary để xử lý giá trị 0 thủ công cho mẫu số.
-    
+    # Xử lý giá trị 0 thủ công cho mẫu số để tính tỷ trọng
     divisor_N_1 = tong_tai_san_N_1 if tong_tai_san_N_1 != 0 else 1e-9
     divisor_N = tong_tai_san_N if tong_tai_san_N != 0 else 1e-9
 
     # Tính tỷ trọng với mẫu số đã được xử lý
     df['Tỷ trọng Năm trước (%)'] = (df['Năm trước'] / divisor_N_1) * 100
     df['Tỷ trọng Năm sau (%)'] = (df['Năm sau'] / divisor_N) * 100
-    # ******************************* PHẦN SỬA LỖI KẾT THÚC *******************************
     
     return df
 
@@ -103,7 +100,10 @@ def get_ai_analysis(data_for_ai, client):
 def initialize_chat_session(df_processed_markdown):
     """Khởi tạo Chat Session với System Instruction."""
     client = st.session_state.get("client")
+    
+    # BỔ SUNG KIỂM TRA: Nếu client không tồn tại, báo lỗi ngay lập tức
     if not client:
+        st.error("Lỗi khởi tạo Chatbot: Không tìm thấy Gemini Client (thiếu Khóa API).", icon="🚨")
         return False
     
     # System instruction để Gemini hiểu ngữ cảnh
@@ -116,15 +116,23 @@ def initialize_chat_session(df_processed_markdown):
     Hãy sử dụng dữ liệu này để trả lời các câu hỏi của người dùng. Nếu thông tin không có trong bảng, hãy trả lời theo kiến thức tài chính chung. Luôn trả lời bằng Tiếng Việt.
     """
     
-    # SỬA LỖI: Cần truyền system_instruction thông qua config cho client.chats.create
-    st.session_state.chat_session = client.chats.create(
-        model="gemini-2.5-flash",
-        config=genai.types.GenerateContentConfig(
-            system_instruction=system_instruction
+    try:
+        # Sử dụng genai.types.GenerateContentConfig để truyền system_instruction (đã sửa lỗi TypeError trước đó)
+        st.session_state.chat_session = client.chats.create(
+            model="gemini-2.5-flash",
+            config=genai.types.GenerateContentConfig(
+                system_instruction=system_instruction
+            )
         )
-    )
-    st.session_state.chat_history.append({"role": "model", "content": "Chào bạn! Tôi là Trợ lý AI. Hãy hỏi tôi về dữ liệu tài chính bạn vừa tải lên nhé."})
-    return True
+        st.session_state.chat_history.append({"role": "model", "content": "Chào bạn! Tôi là Trợ lý AI. Hãy hỏi tôi về dữ liệu tài chính bạn vừa tải lên nhé."})
+        return True
+    except APIError as e:
+        st.error(f"Lỗi khởi tạo Chat Session: Lỗi API ({e}). Vui lòng kiểm tra Khóa API.", icon="🚨")
+        return False
+    except Exception as e:
+        st.error(f"Lỗi khởi tạo Chat Session: Đã xảy ra lỗi không xác định ({e}).", icon="🚨")
+        return False
+
 
 # --- Hàm xử lý Chatbot cho Pop-up ---
 def handle_chatbot_input_popup(user_prompt, chat_container):
@@ -140,12 +148,14 @@ def handle_chatbot_input_popup(user_prompt, chat_container):
     # Gửi tin nhắn đến Gemini và hiển thị kết quả
     try:
         # Hiển thị tin nhắn người dùng
+        # Sử dụng chat_container để hiển thị tin nhắn trong hộp lịch sử
         with chat_container.chat_message("user"):
             st.markdown(user_prompt)
 
         # Hiển thị phản hồi của model
         with chat_container.chat_message("model"):
             with st.spinner("Đang phân tích..."):
+                # SỬA LỖI: Đoạn code này bị lỗi timeout hoặc lỗi API call
                 response = st.session_state.chat_session.send_message(user_prompt)
                 model_response = response.text
             
@@ -155,12 +165,13 @@ def handle_chatbot_input_popup(user_prompt, chat_container):
         st.session_state.chat_history.append({"role": "model", "content": model_response})
         
     except APIError as e:
-        error_message = f"Lỗi gọi Gemini API: {e}"
-        chat_container.error(error_message, icon="🚨")
-        st.session_state.chat_history.append({"role": "model", "content": "Lỗi: Không thể nhận phản hồi từ AI."})
+        # SỬA LỖI: Cập nhật thông báo lỗi chi tiết hơn
+        error_message = f"Lỗi API: Không thể nhận phản hồi. Vui lòng kiểm tra Khóa API hoặc giới hạn sử dụng. Chi tiết: {e}"
+        st.error(error_message, icon="🚨")
+        st.session_state.chat_history.append({"role": "model", "content": "Lỗi: Không thể nhận phản hồi từ AI do lỗi API."})
     except Exception as e:
-        error_message = f"Đã xảy ra lỗi không xác định: {e}"
-        chat_container.error(error_message, icon="🚨")
+        error_message = f"Lỗi không xác định: {e}"
+        st.error(error_message, icon="🚨")
         st.session_state.chat_history.append({"role": "model", "content": "Lỗi: Đã xảy ra lỗi bất ngờ."})
 
 
@@ -294,19 +305,20 @@ st.markdown("*(Dùng để hỏi đáp chuyên sâu về dữ liệu tài chính
 
 # Nút Bật/Reset Chat
 if df_processed is not None:
+    # Kiểm tra lại client trước khi cố gắng khởi tạo chat
     if st.button("Bật/Reset Chat", key="reset_chat", type="primary"):
         st.session_state.chat_session = None # Xóa session cũ
         st.session_state.chat_history = [] # Xóa lịch sử
         
         # Khởi tạo session mới sau khi reset
-        if st.session_state.client and df_processed_markdown:
+        client = st.session_state.get("client")
+        if client and df_processed_markdown:
             if initialize_chat_session(df_processed_markdown):
                 # Khởi tạo thành công, chỉ cần rerender
                 st.rerun() 
-            else:
-                st.error("Không thể khởi tạo chat session. Vui lòng kiểm tra Khóa API.")
+            # initialize_chat_session sẽ tự hiển thị lỗi nếu có
         else:
-            st.error("Lỗi: Không tìm thấy Khóa API hoặc Client chưa sẵn sàng.")
+            st.error("Lỗi: Không tìm thấy Khóa API hoặc Client chưa sẵn sàng. Vui lòng kiểm tra cấu hình Khóa API.", icon="🚨")
 else:
     st.info("Tải file lên trước để kích hoạt chatbot.")
 
@@ -327,6 +339,7 @@ if st.session_state.chat_session is not None:
     
     if user_prompt:
         # Nếu người dùng nhập, gọi hàm xử lý chat
+        # SỬA LỖI: Cần truyền chat_history_container vào hàm xử lý
         handle_chatbot_input_popup(user_prompt, chat_history_container)
         st.rerun() # Tải lại trang để hiển thị tin nhắn mới ngay lập tức
 else:
